@@ -13,10 +13,10 @@
 """Implementation of Wasserstein Distortion in PyTorch."""
 
 from typing import override
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 from torchvision import models as tv
 
 Tensor = torch.Tensor
@@ -73,7 +73,7 @@ class WassersteinDistortionFeature(nn.Module):
         self,
         features_a: Tensor,
         features_b: Tensor,
-        log2_sigma: Tensor,
+        log2_sigma: float,
     ) -> Tensor:
         """Calculates the Wasserstein distortion between two feature maps."""
         mean_pyr_a, var_pyr_a = self.multi_level_stats(features_a)
@@ -88,10 +88,8 @@ class WassersteinDistortionFeature(nn.Module):
 
         wasserstein_dist = 0
         for i, wd_map in enumerate(wd_maps):
-            weights_i = F.relu(1 - torch.abs(log2_sigma - i))
-            if i > 0:
-                log2_sigma = self.lowpass(log2_sigma, stride=2)
-            wasserstein_dist += (weights_i * wd_map).mean()
+            weights_i = max(1.0 - abs(log2_sigma - i), 0.0)
+            wasserstein_dist += weights_i * wd_map.mean()
         assert isinstance(wasserstein_dist, Tensor)
         return wasserstein_dist
 
@@ -249,7 +247,7 @@ class VGG16WassersteinDistortion(nn.Module):
         self,
         pred: Tensor,
         gt: Tensor,
-        log2_sigma: Tensor,
+        log2_sigma: float = 2.0,
         num_scales: int = 3,
     ) -> Tensor:
         if self.grayscale:
@@ -269,18 +267,15 @@ class VGG16WassersteinDistortion(nn.Module):
         wasserstein_dist = 0
         assert len(feats_pred) == len(feats_gt)
         for fp, fgt in zip(feats_pred, feats_gt):
-            ls = F.interpolate(
-                log2_sigma, size=fgt.shape[-2:], mode="bilinear", antialias=True
-            )
             # Rescale sigma to match the feature arrays. For example, if a feature array
             # has a very low spatial resolution, we make sigma correspondingly smaller,
             # because each element in the feature array covers a larger portion of the
             # image. Since we are in log space, we subtract the log of the size ratio and
             # then cap at zero.
-            log_ratio_h = np.log2(log2_sigma.shape[-2] / fgt.shape[-2])
-            log_ratio_w = np.log2(log2_sigma.shape[-1] / fgt.shape[-1])
+            log_ratio_h = math.log2(pred.shape[-2] / fgt.shape[-2])
+            log_ratio_w = math.log2(pred.shape[-1] / fgt.shape[-1])
             mean_log_ratio = (log_ratio_h + log_ratio_w) / 2
-            ls = F.relu(ls - mean_log_ratio)
+            ls = max(log2_sigma - mean_log_ratio, 0.0)
             wasserstein_dist += self.wasserstein_distortion_feature(fp, fgt, ls)
         assert isinstance(wasserstein_dist, Tensor)
         return wasserstein_dist
