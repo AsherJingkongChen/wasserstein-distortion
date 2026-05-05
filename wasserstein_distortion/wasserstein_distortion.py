@@ -119,7 +119,8 @@ class MultiscaleTruncatedVGG16(nn.Module):
         this option is available here as well.
         """
         super().__init__()
-        vgg_pretrained_features = tv.vgg16(pretrained=pretrained).features
+        weights = tv.VGG16_Weights.DEFAULT if pretrained else None
+        vgg_pretrained_features = tv.vgg16(weights=weights).features
         self.slice1 = torch.nn.Sequential()
         self.slice2 = torch.nn.Sequential()
         self.slice3 = torch.nn.Sequential()
