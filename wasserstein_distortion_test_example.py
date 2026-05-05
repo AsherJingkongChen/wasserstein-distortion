@@ -16,7 +16,7 @@ from PIL import Image
 import torch
 import torch.optim as optim
 import numpy as np
-from wasserstein_distortion import VGG16WassersteinDistortion
+from wasserstein_distortion import WD
 
 
 def im2tensor(image, cent=0.0, factor=255.0):
@@ -41,14 +41,11 @@ def optimize_noise():
         torch.randn_like(im1_tensor), requires_grad=True
     ).cuda()
     optimizer = optim.Adam([im2_tensor], lr=0.1)
-    wloss = VGG16WassersteinDistortion().cuda()
-    # To test the Wasserstein distortion, we construct a manual log2_sigma map
-    # with globally log2_sigma = 4
-    log2_sigma = torch.zeros_like(im1_tensor[:, 0:1, ...]) + 4
-    constant_log2_sigma = log2_sigma.cuda()
+    wloss = WD().cuda()
+    log2_sigma = 4.0
     for i in range(200):
         optimizer.zero_grad()
-        loss = wloss(im1_tensor, im2_tensor, constant_log2_sigma)
+        loss = wloss(im1_tensor, im2_tensor, log2_sigma)
         if i % 20 == 0:
             print(loss.item())
             im_pred = convert_to_numpy_image(im2_tensor)
@@ -69,18 +66,18 @@ def test_sample():
     import codex.loss
     import jax.numpy as jnp
 
-    wloss_pytorch = VGG16WassersteinDistortion()
+    wloss_pytorch = WD()
 
-    log2_sigma = torch.zeros_like(img1_tensor[:, 0:1, ...]) + 2
+    log2_sigma = 2.0
 
     img1_jax_array = jnp.array(img1_tensor.cpu().numpy())
     img2_jax_array = jnp.array(img2_tensor.cpu().numpy())
-    log2_sigma_jax = jnp.array(log2_sigma.cpu().numpy())
+    log2_sigma_jax = jnp.full(img1_jax_array.shape[-2:], log2_sigma)
 
     codex.loss.load_vgg16_model(mock=False)
 
     loss_jax = codex.loss.vgg16_wasserstein_distortion(
-        img1_jax_array[0], img2_jax_array[0], log2_sigma_jax[0, 0], num_scales=3
+        img1_jax_array[0], img2_jax_array[0], log2_sigma_jax, num_scales=3
     )
 
     loss_pytorch = wloss_pytorch(img1_tensor, img2_tensor, log2_sigma, num_scales=3)

@@ -13,4 +13,4 @@
 """Implementation of Wasserstein Distortion in PyTorch."""
 __version__ = "0.1.0"
 
-from .wasserstein_distortion import VGG16WassersteinDistortion
+from .wasserstein_distortion import VGG16WassersteinDistortion as WD
