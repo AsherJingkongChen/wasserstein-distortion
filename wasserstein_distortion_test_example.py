@@ -45,7 +45,7 @@ def optimize_noise():
     log2_sigma = 4.0
     for i in range(200):
         optimizer.zero_grad()
-        loss = wloss(im1_tensor, im2_tensor, log2_sigma)
+        loss = wloss(im1_tensor, im2_tensor, log2_sigma=log2_sigma)
         if i % 20 == 0:
             print(loss.item())
             im_pred = convert_to_numpy_image(im2_tensor)
@@ -80,7 +80,7 @@ def test_sample():
         img1_jax_array[0], img2_jax_array[0], log2_sigma_jax, num_scales=3
     )
 
-    loss_pytorch = wloss_pytorch(img1_tensor, img2_tensor, log2_sigma, num_scales=3)
+    loss_pytorch = wloss_pytorch(img1_tensor, img2_tensor, log2_sigma=log2_sigma, num_scales=3)
     print("PyTorch Loss:", loss_pytorch.item())
     print("JAX Loss:", loss_jax.item())
 

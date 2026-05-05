@@ -73,6 +73,7 @@ class WassersteinDistortionFeature(nn.Module):
         self,
         features_a: Tensor,
         features_b: Tensor,
+        mask: Tensor | None,
         log2_sigma: float,
     ) -> Tensor:
         """Calculates the Wasserstein distortion between two feature maps."""
@@ -86,10 +87,20 @@ class WassersteinDistortionFeature(nn.Module):
             square_scale = torch.square(std_pyr_a_i - std_pyr_b_i)
             wd_maps.append(square_mu + square_scale)
 
+        dtype = wd_maps[0].dtype
+        eps = torch.finfo(dtype).eps
+        if mask is not None:
+            mask = mask.to(dtype)
+
         wasserstein_dist = 0
         for i, wd_map in enumerate(wd_maps):
             weights_i = max(1.0 - abs(log2_sigma - i), 0.0)
-            wasserstein_dist += weights_i * wd_map.mean()
+            if mask is None:
+                wasserstein_dist += weights_i * wd_map.mean()
+            else:
+                m = F.interpolate(mask, size=wd_map.shape[-2:], mode="nearest")
+                wd_map_mean = (wd_map * m).sum() / (m.sum() * wd_map.shape[1]).clamp(min=eps)
+                wasserstein_dist += weights_i * wd_map_mean
         assert isinstance(wasserstein_dist, Tensor)
         return wasserstein_dist
 
@@ -247,6 +258,7 @@ class VGG16WassersteinDistortion(nn.Module):
         self,
         pred: Tensor,
         gt: Tensor,
+        mask: Tensor | None = None,
         log2_sigma: float = 2.0,
         num_scales: int = 3,
     ) -> Tensor:
@@ -276,6 +288,6 @@ class VGG16WassersteinDistortion(nn.Module):
             log_ratio_w = math.log2(pred.shape[-1] / fgt.shape[-1])
             mean_log_ratio = (log_ratio_h + log_ratio_w) / 2
             ls = max(log2_sigma - mean_log_ratio, 0.0)
-            wasserstein_dist += self.wasserstein_distortion_feature(fp, fgt, ls)
+            wasserstein_dist += self.wasserstein_distortion_feature(fp, fgt, mask, ls)
         assert isinstance(wasserstein_dist, Tensor)
         return wasserstein_dist
