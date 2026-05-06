@@ -47,16 +47,12 @@ class MultiLevelStats(nn.Module):
     @override
     def forward(self, x):
         squared = x**2
-        means = []
-        variances = []
         for _ in range(self.num_levels):
             m = self.lowpass(x, stride=1)
             p = self.lowpass(squared, stride=1)
-            means.append(m)
-            variances.append(p - m**2)
+            yield m, p - m**2
             x = m[..., ::2, ::2]
             squared = p[..., ::2, ::2]
-        return means, variances
 
 
 class WassersteinDistortionFeature(nn.Module):
@@ -77,32 +73,31 @@ class WassersteinDistortionFeature(nn.Module):
         log2_sigma: float,
     ) -> Tensor:
         """Calculates the Wasserstein distortion between two feature maps."""
-        mean_pyr_a, var_pyr_a = self.multi_level_stats(features_a)
-        mean_pyr_b, var_pyr_b = self.multi_level_stats(features_b)
-        wd_maps = [torch.square(features_a - features_b)]
-        for i in range(self.num_levels):
-            std_pyr_a_i = torch.sqrt(torch.clamp(var_pyr_a[i], min=1e-8))
-            std_pyr_b_i = torch.sqrt(torch.clamp(var_pyr_b[i], min=1e-8))
-            square_mu = torch.square(mean_pyr_a[i] - mean_pyr_b[i])
-            square_scale = torch.square(std_pyr_a_i - std_pyr_b_i)
-            wd_maps.append(square_mu + square_scale)
-
-        dtype = wd_maps[0].dtype
+        dtype = features_a.dtype
         eps = torch.finfo(dtype).eps
         if mask is not None:
             mask = mask.to(dtype)
 
-        wasserstein_dist = 0
-        for i, wd_map in enumerate(wd_maps):
-            weights_i = max(1.0 - abs(log2_sigma - i), 0.0)
+        wasserstein_dist: Tensor = features_a.new_zeros(())
+        for i, wd_map in enumerate(self.iter_wd_maps(features_a, features_b)):
+            weights = max(1.0 - abs(log2_sigma - i), 0.0)
             if mask is None:
-                wasserstein_dist += weights_i * wd_map.mean()
+                wd_map_mean = wd_map.mean()
             else:
                 m = F.interpolate(mask, size=wd_map.shape[-2:], mode="nearest")
                 wd_map_mean = (wd_map * m).sum() / (m.sum() * wd_map.shape[1]).clamp(min=eps)
-                wasserstein_dist += weights_i * wd_map_mean
-        assert isinstance(wasserstein_dist, Tensor)
+            wasserstein_dist = wasserstein_dist + weights * wd_map_mean
         return wasserstein_dist
+
+    def iter_wd_maps(self, features_a: Tensor, features_b: Tensor):
+        yield torch.square(features_a - features_b)
+        for (m_a, var_a), (m_b, var_b) in zip(
+            self.multi_level_stats(features_a),
+            self.multi_level_stats(features_b),
+        ):
+            std_a = torch.sqrt(torch.clamp(var_a, min=1e-8))
+            std_b = torch.sqrt(torch.clamp(var_b, min=1e-8))
+            yield torch.square(m_a - m_b) + torch.square(std_a - std_b)
 
 
 # pyright: reportIndexIssue=false
@@ -273,7 +268,9 @@ class VGG16WassersteinDistortion(nn.Module):
                 f"Predicted and ground truth images must have the same shape, "
                 f"but got {pred.shape} and {gt.shape}."
             )
-        feats_pred = self.feature_backbone(pred, num_scales=num_scales)
+        feats_pred = torch.utils.checkpoint.checkpoint(
+            self.feature_backbone, pred, num_scales, use_reentrant=False
+        )
         feats_gt = self.feature_backbone(gt, num_scales=num_scales)
 
         wasserstein_dist = 0
@@ -288,6 +285,8 @@ class VGG16WassersteinDistortion(nn.Module):
             log_ratio_w = math.log2(pred.shape[-1] / fgt.shape[-1])
             mean_log_ratio = (log_ratio_h + log_ratio_w) / 2
             ls = max(log2_sigma - mean_log_ratio, 0.0)
-            wasserstein_dist += self.wasserstein_distortion_feature(fp, fgt, mask, ls)
+            wasserstein_dist += torch.utils.checkpoint.checkpoint(
+                self.wasserstein_distortion_feature, fp, fgt, mask, ls, use_reentrant=False
+            )
         assert isinstance(wasserstein_dist, Tensor)
         return wasserstein_dist
