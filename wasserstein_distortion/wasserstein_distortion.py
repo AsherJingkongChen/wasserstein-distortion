@@ -17,6 +17,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torchvision import models as tv
 
 Tensor = torch.Tensor
@@ -268,25 +269,25 @@ class VGG16WassersteinDistortion(nn.Module):
                 f"Predicted and ground truth images must have the same shape, "
                 f"but got {pred.shape} and {gt.shape}."
             )
-        feats_pred = torch.utils.checkpoint.checkpoint(
-            self.feature_backbone, pred, num_scales, use_reentrant=False
-        )
-        feats_gt = self.feature_backbone(gt, num_scales=num_scales)
+        feats_pred = checkpoint(self.feature_backbone, pred, num_scales, use_reentrant=False)
+        feats_gt = self.feature_backbone(gt, num_scales)
 
-        wasserstein_dist = 0
+        wasserstein_dist = 0.0
         assert len(feats_pred) == len(feats_gt)
-        for fp, fgt in zip(feats_pred, feats_gt):
-            # Rescale sigma to match the feature arrays. For example, if a feature array
-            # has a very low spatial resolution, we make sigma correspondingly smaller,
-            # because each element in the feature array covers a larger portion of the
-            # image. Since we are in log space, we subtract the log of the size ratio and
-            # then cap at zero.
-            log_ratio_h = math.log2(pred.shape[-2] / fgt.shape[-2])
-            log_ratio_w = math.log2(pred.shape[-1] / fgt.shape[-1])
-            mean_log_ratio = (log_ratio_h + log_ratio_w) / 2
-            ls = max(log2_sigma - mean_log_ratio, 0.0)
-            wasserstein_dist += torch.utils.checkpoint.checkpoint(
-                self.wasserstein_distortion_feature, fp, fgt, mask, ls, use_reentrant=False
-            )
+        with torch.autocast(pred.device.type, enabled=False):
+            for fpd, fgt in zip(feats_pred, feats_gt):
+                # Rescale sigma to match the feature arrays. For example, if a feature array
+                # has a very low spatial resolution, we make sigma correspondingly smaller,
+                # because each element in the feature array covers a larger portion of the
+                # image. Since we are in log space, we subtract the log of the size ratio and
+                # then cap at zero.
+                log_ratio_h = math.log2(pred.shape[-2] / fgt.shape[-2])
+                log_ratio_w = math.log2(pred.shape[-1] / fgt.shape[-1])
+                mean_log_ratio = (log_ratio_h + log_ratio_w) / 2
+                ls = max(log2_sigma - mean_log_ratio, 0.0)
+                wasserstein_dist += checkpoint(
+                    self.wasserstein_distortion_feature,
+                    fpd.float(), fgt.float(), mask, ls, use_reentrant=False
+                )
         assert isinstance(wasserstein_dist, Tensor)
         return wasserstein_dist
